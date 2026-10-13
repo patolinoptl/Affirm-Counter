@@ -1,65 +1,9 @@
-<!doctype html>
-<html lang="pt-BR">
-<head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#101427"><title>Affirm Counter</title>
-<style>
-:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#f6f7ff;background:#0b1020}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:22px}.app{width:min(100%,460px);background:#161c33;border:1px solid #313a59;border-radius:26px;padding:26px;box-shadow:0 20px 70px #0005}h1{margin:0 0 6px;font-size:27px}.sub{color:#a9b5d3;margin:0 0 25px}.field{display:block;margin:15px 0 7px;font-size:14px;color:#cdd6ee}input{width:100%;padding:14px;border:1px solid #48516d;border-radius:12px;background:#0d1428;color:white;font:inherit}input:focus{outline:2px solid #8e9eff}.counter{text-align:center;background:#0d1428;border-radius:22px;padding:27px 15px;margin-top:22px}.number{font-size:clamp(56px,17vw,90px);font-weight:800;line-height:1.2;font-variant-numeric:tabular-nums}.muted{color:#a9b5d3;font-size:13px}.track{background:#343e59;height:9px;border-radius:20px;overflow:hidden;margin:18px 0 8px}.bar{background:linear-gradient(90deg,#8494ff,#b19bff);height:100%;width:0%;transition:width .2s}.actions{display:flex;gap:10px;margin-top:20px}button{border:0;border-radius:12px;padding:14px 12px;font:inherit;font-weight:700;cursor:pointer}#toggle{flex:2;background:#a6b3ff;color:#11152a}#reset{flex:1;background:#343d58;color:white}.status{min-height:22px;margin-top:16px;color:#c2cae2;font-size:13px}.heard{min-height:20px;color:#8e9eff;font-size:13px;overflow-wrap:anywhere}.note{font-size:12px;color:#9ba8c8;line-height:1.6;margin-top:20px}button:disabled{opacity:.5;cursor:not-allowed}
-</style>
-</head>
-<body><main class="app">
-<h1>🎙️ Affirm Counter</h1><p class="sub">Suas afirmações, uma de cada vez.</p>
-<label class="field" for="phrase">Frase para reconhecer</label><input id="phrase" value="Neymar é lindo" autocomplete="off">
-<label class="field" for="goal">Meta de repetições</label><input id="goal" type="number" min="1" max="10000000" value="100" inputmode="numeric">
-<section class="counter" aria-live="polite"><div class="muted">REPETIÇÕES</div><div class="number" id="count">0x</div><div class="track"><div class="bar" id="bar"></div></div><div class="muted" id="progress">0% da meta</div></section>
-<div class="actions"><button id="toggle">🎤 Iniciar</button><button id="reset">Zerar</button></div>
-<div class="status" id="status" role="status">Pronto para começar.</div><div class="heard" id="heard"></div>
-<p class="note">Mantenha a página aberta e o microfone autorizado. O reconhecimento pode falhar, interromper ou depender de serviços do navegador. O progresso é salvo neste dispositivo.</p>
-</main>
-<script>
-'use strict';
-const $=id=>document.getElementById(id);
-const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
-const KEY='affirm-counter-v1';
-let data={phrase:'Neymar é lindo',goal:100,count:0};
-try{const saved=JSON.parse(localStorage.getItem(KEY));if(saved&&typeof saved==='object'){data={...data,...saved};}}catch{}
-data.count=Math.max(0,Number(data.count)||0);
-data.goal=Math.max(1,Number(data.goal)||100);
-$('phrase').value=String(data.phrase||'Neymar é lindo');$('goal').value=data.goal;
-let listening=false,recognition=null,restartTimer=null,session=0,failures=0,lastError="";
-const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(data));}catch{}};
-const normalize=s=>String(s).toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
-const render=()=>{$('count').textContent=data.count.toLocaleString('pt-BR')+'x';const pct=Math.min(100,Math.round(data.count/data.goal*100));$('bar').style.width=pct+'%';$('progress').textContent=pct+'% da meta';};
-const status=s=>$('status').textContent=s;
-function stop(){listening=false;session++;clearTimeout(restartTimer);restartTimer=null;$('toggle').textContent='🎤 Iniciar';try{recognition?.stop();}catch{}recognition=null;status('Pausado.');}
-function countOccurrences(transcript,target){const words=normalize(target).split(' ').filter(Boolean),spoken=normalize(transcript).split(' ').filter(Boolean);if(!words.length)return 0;let n=0;for(let i=0;i<=spoken.length-words.length;){if(words.every((w,j)=>spoken[i+j]===w)){n++;i+=words.length;}else{i++;}}return n;}
-function start(){if(!SpeechRecognition){status('Este navegador não oferece reconhecimento de voz compatível. Tente Chrome ou Edge no Windows.');return;}if(!normalize(data.phrase)){status('Digite uma frase primeiro.');return;}
-listening=true;failures=0;lastError='';const current=++session;$('toggle').textContent='⏸ Pausar';$('heard').textContent='';
-const launch=()=>{if(!listening||current!==session)return;const r=new SpeechRecognition();recognition=r;r.lang='pt-BR';r.continuous=true;r.interimResults=true;r.maxAlternatives=1;let finals='';
-r.onstart=()=>status('🎙️ Escutando...');
-r.onresult=e=>{failures=0;lastError='';let finalText='';let interim='';for(let i=0;i<e.results.length;i++){const item=e.results[i];if(item.isFinal)finalText+=item[0].transcript+' ';else interim+=item[0].transcript+' ';}
-// Reconta todos os resultados finais da sessão para evitar duplicação de eventos.
-const total=countOccurrences(finalText,data.phrase);const delta=Math.max(0,total-(r._counted||0));r._counted=total;if(delta){data.count+=delta;save();render();if(data.count>=data.goal)status('🎉 Meta alcançada!');}
-$('heard').textContent='Ouvido: '+(interim||finalText||'...').slice(-170);
-};
-r.onerror=e=>{lastError=e.error||'desconhecido';
-if(['not-allowed','service-not-allowed','audio-capture','language-not-supported'].includes(lastError)){
-stop();status('Erro de reconhecimento: '+lastError+'. Verifique permissões, microfone e navegador.');return;
-}
-status('Erro de reconhecimento: '+lastError+'.');};
-r.onend=()=>{if(!listening||current!==session)return;
-failures++;
-if(failures>=4){const reason=lastError||'sessão encerrada sem transcrição';stop();status('Reconhecimento indisponível ('+reason+'). Interrompido após 4 tentativas. Teste o ditado do navegador e confira a conexão.');return;}
-status('Reconectando ('+failures+'/4). '+(lastError?'Erro: '+lastError:'Sessão encerrada.'));
-restartTimer=setTimeout(launch,1200);
-};
-try{r.start();}catch(e){stop();status('Não foi possível iniciar: '+e.message);}};
-launch();}
-$('toggle').addEventListener('click',()=>listening?stop():start());
-$('reset').addEventListener('click',()=>{if(!confirm('Zerar a contagem atual?'))return;data.count=0;save();render();});
-$('phrase').addEventListener('change',e=>{const next=e.target.value.trim();if(!next){e.target.value=data.phrase;return;}if(listening)stop();data.phrase=next;data.count=0;save();render();status('Nova frase definida. Contagem reiniciada.');});
-$('goal').addEventListener('change',e=>{data.goal=Math.max(1,Math.floor(Number(e.target.value)||100));e.target.value=data.goal;save();render();});
-window.addEventListener('pagehide',()=>{if(listening)stop();});
-if(!SpeechRecognition){$('toggle').disabled=true;status('Reconhecimento de voz indisponível neste navegador.');}
-render();
-</script></body></html>
+<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#101427"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Affirm Counter"><link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icon-192.png"><title>Affirm Counter 2.0</title><style>
+:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#f5f7ff;background:#0b1020}*{box-sizing:border-box}body{margin:0;padding:18px;display:flex;justify-content:center}.app{width:min(100%,530px);background:#161c33;border:1px solid #303957;border-radius:24px;padding:23px;margin:12px 0 35px;box-shadow:0 18px 50px #0004}h1{margin:0;font-size:27px}h2{font-size:17px;margin:0 0 12px}.sub,.muted,.note{color:#aab7d4}.sub{margin:5px 0 22px}.note{font-size:12px;line-height:1.55}.panel{border:1px solid #343e5b;border-radius:18px;padding:16px;margin:15px 0}.field{display:block;font-size:13px;margin:10px 0 6px;color:#cbd5ee}input,select{width:100%;border:1px solid #4c5875;border-radius:11px;background:#0d1428;color:white;padding:12px;font:inherit;min-width:0}button{border:0;border-radius:11px;padding:12px;font:inherit;font-weight:700;cursor:pointer;background:#a5b2ff;color:#10152b}button.secondary{background:#343f5e;color:#f5f7ff}button.danger{background:#6d3648;color:#fff}button:disabled{opacity:.5;cursor:not-allowed}.row{display:flex;gap:9px;align-items:center}.row>*{min-width:0}.row button{flex-shrink:0}.row .grow{flex:1}.counter{text-align:center;background:#0d1428;border-radius:18px;padding:24px 14px}.number{font-size:clamp(50px,16vw,82px);font-weight:800;font-variant-numeric:tabular-nums}.track{height:9px;background:#343f5e;border-radius:30px;overflow:hidden;margin:14px 0 7px}.bar{height:100%;background:linear-gradient(90deg,#8799ff,#bda5ff);width:0;transition:width .25s}.status{font-size:13px;color:#c4d0ed;margin-top:14px;overflow-wrap:anywhere;min-height:20px}.heard{font-size:12px;color:#a5b2ff;overflow-wrap:anywhere;min-height:18px}.history-row{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #303a55;font-size:14px}.history-row:last-child{border:0}.small{font-size:12px}.hidden{display:none!important}.spacer{height:4px}.pill{display:inline-block;font-size:11px;border-radius:20px;background:#273456;color:#c7d2ff;padding:5px 8px}a{color:#bac7ff}#syncMsg{font-size:12px;line-height:1.5;margin-top:8px;color:#c8d2ea}
+</style></head><body><main class="app"><h1>🎙️ Affirm Counter <span class="pill">2.0</span></h1><p class="sub">Suas afirmações, um dia de cada vez.</p>
+<section class="panel"><h2>Minhas afirmações</h2><label class="field" for="phrases">Escolha uma frase</label><select id="phrases"></select><div class="row" style="margin-top:10px"><button class="secondary grow" id="add">+ Nova frase</button><button class="secondary" id="rename">Editar</button><button class="danger" id="remove">Excluir</button></div><label class="field" for="goal">Meta diária desta frase</label><input type="number" id="goal" min="1" max="1000000" inputmode="numeric"></section>
+<section class="counter" aria-live="polite"><div class="muted small">REPETIÇÕES DE HOJE</div><div class="number" id="count">0x</div><div class="track"><div class="bar" id="bar"></div></div><div class="muted small" id="progress">0% da meta</div><div class="muted small" id="alltime" style="margin-top:9px">Total geral: 0x</div></section>
+<div class="row" style="margin-top:14px"><button id="toggle" class="grow">🎤 Iniciar</button><button id="reset" class="secondary">Zerar hoje</button></div><div class="status" id="status" role="status">Pronto para começar.</div><div class="heard" id="heard"></div>
+<section class="panel"><h2>📊 Histórico da frase</h2><div id="history"></div></section>
+<section class="panel"><h2>☁️ Sincronização entre dispositivos</h2><p class="note">Opcional. Ative o Firebase seguindo o arquivo INSTRUCOES.md. Use o mesmo e-mail nos dois dispositivos. Sem ele, seus dados ficam salvos apenas neste navegador.</p><div id="syncUnavailable" class="note">Sincronização ainda não configurada.</div><div id="syncControls" class="hidden"><label class="field" for="email">E-mail</label><input id="email" type="email" autocomplete="email"><label class="field" for="password">Senha (mínimo 6 caracteres)</label><input id="password" type="password" autocomplete="current-password"><div class="row" style="margin-top:10px;flex-wrap:wrap"><button id="login">Entrar</button><button id="register" class="secondary">Criar conta</button><button id="logout" class="secondary">Sair</button></div><div class="row" style="margin-top:10px"><button id="syncNow" class="secondary grow">Enviar dados locais para a nuvem</button></div></div><div id="syncMsg"></div></section>
+<p class="note">Mantenha a tela aberta e autorize o microfone. O reconhecimento pode depender do navegador e da conexão. As repetições são estimadas a partir da transcrição, e frases rápidas podem não ser detectadas.</p></main><script src="config.js"></script><script type="module" src="app.js"></script></body></html>
