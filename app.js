@@ -23,9 +23,57 @@ const days=Object.entries(i.days).filter(([date,n])=>n>0).sort((a,b)=>b[0].local
 $('historyDate').onchange=e=>{if(e.target.value){selectedHistoryDate=e.target.value;render()}};
 $('historyToday').onclick=()=>{selectedHistoryDate=today();render()};
 function stop(){listening=false;session++;clearTimeout(restartTimer);restartTimer=null;$('toggle').textContent='🎤 Iniciar';try{recognition?.stop()}catch{}recognition=null;status('Pausado.')}
-function occurrences(transcript,target){const a=norm(target).split(' ').filter(Boolean),b=norm(transcript).split(' ').filter(Boolean);if(!a.length)return 0;let n=0;for(let k=0;k<=b.length-a.length;){if(a.every((w,j)=>w===b[k+j])){n++;k+=a.length}else k++}return n}
+// Contagem aproximada conservadora: permite um artigo omitido OU uma
+// pequena troca de terminação por repetição. Não inventa áudio ausente.
+const OPTIONAL_WORDS=new Set(['o','a','os','as','um','uma']);
+function closeWord(a,b){
+ if(a===b)return true;
+ if(a.length<5||b.length<5)return false;
+ if(a.slice(0,-1)===b.slice(0,-1))return true; // reconhecido/reconhecida
+ if(Math.abs(a.length-b.length)>1)return false;
+ let i=0,j=0,edits=0;
+ while(i<a.length&&j<b.length){
+  if(a[i]===b[j]){i++;j++;continue}
+  if(++edits>1)return false;
+  if(a.length>b.length)i++;else if(b.length>a.length)j++;else{i++;j++}
+ }
+ return edits+(a.length-i)+(b.length-j)<=1;
+}
+function matchAt(words,target,start){
+ // Uma pequena diferença no máximo, para evitar contagens falsas.
+ const memo=new Map();
+ function visit(i,j,errors){
+  const key=i+','+j+','+errors;
+  if(memo.has(key))return memo.get(key);
+  if(i===target.length)return j;
+  if(j>=words.length){
+   if(errors===0&&OPTIONAL_WORDS.has(target[i])&&i+1===target.length)return j;
+   return -1;
+  }
+  let end=-1;
+  if(target[i]===words[j])end=visit(i+1,j+1,errors);
+  if(end<0&&errors===0){
+   if(OPTIONAL_WORDS.has(target[i]))end=visit(i+1,j,1);
+   if(end<0&&closeWord(target[i],words[j]))end=visit(i+1,j+1,1);
+   // Artigo extra introduzido pelo reconhecedor.
+   if(end<0&&OPTIONAL_WORDS.has(words[j]))end=visit(i,j+1,1);
+  }
+  memo.set(key,end);return end;
+ }
+ return visit(0,start,0);
+}
+function occurrences(transcript,target){
+ const a=norm(target).split(' ').filter(Boolean),b=norm(transcript).split(' ').filter(Boolean);
+ if(!a.length||!b.length)return 0;
+ let count=0;
+ for(let k=0;k<b.length;){
+  const end=matchAt(b,a,k);
+  if(end>k){count++;k=end}else k++;
+ }
+ return count;
+}
 const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
-function start(){if(!SpeechRecognition){status('Reconhecimento indisponível neste navegador.');return}if(!norm(current().text)){status('Escolha uma frase válida.');return}listening=true;failures=0;lastError='';const active=++session,phraseId=current().id,phrase=current().text;$('toggle').textContent='⏸ Pausar';$('heard').textContent='';const launch=()=>{if(!listening||active!==session)return;const r=new SpeechRecognition();recognition=r;r.lang='pt-BR';r.continuous=true;r.interimResults=true;r.maxAlternatives=1;r._counted=0;r.onstart=()=>status('🎙️ Escutando...');r.onresult=e=>{failures=0;lastError='';let finals='',interim='';for(let k=0;k<e.results.length;k++){const item=e.results[k];if(item.isFinal)finals+=item[0].transcript+' ';else interim+=item[0].transcript+' '}const n=occurrences(finals,phrase),delta=Math.max(0,n-r._counted);r._counted=n;if(delta){const item=state.items.find(x=>x.id===phraseId);if(item){const day=today();item.days[day]=(item.days[day]||0)+delta;persist();render();enqueueCloudCount(phraseId,day,delta);if((item.days[day]||0)>=item.goal)status('🎉 Meta diária alcançada!')}}$('heard').textContent='Ouvido: '+(interim||finals||'...').slice(-170)};r.onerror=e=>{lastError=e.error||'desconhecido';if(['not-allowed','service-not-allowed','audio-capture','language-not-supported'].includes(lastError)){stop();status('Erro: '+lastError+'. Verifique microfone e navegador.');return}status('Erro: '+lastError)};r.onend=()=>{if(!listening||active!==session)return;failures++;if(failures>=4){const reason=lastError||'sessão encerrada';stop();status('Reconhecimento interrompido ('+reason+'). Tente iniciar novamente.');return}status('Reconectando ('+failures+'/4)...');restartTimer=setTimeout(launch,1200)};try{r.start()}catch(e){stop();status('Falha ao iniciar: '+e.message)}};launch()}
+function start(){if(!SpeechRecognition){status('Reconhecimento indisponível neste navegador.');return}if(!norm(current().text)){status('Escolha uma frase válida.');return}listening=true;failures=0;lastError='';const active=++session,phraseId=current().id,phrase=current().text;$('toggle').textContent='⏸ Pausar';$('heard').textContent='';const launch=()=>{if(!listening||active!==session)return;const r=new SpeechRecognition();recognition=r;r.lang='pt-BR';r.continuous=true;r.interimResults=true;r.maxAlternatives=1;r._counted=0;r.onstart=()=>status('🎙️ Escutando...');r.onresult=e=>{failures=0;lastError='';let finals='',interim='';for(let k=0;k<e.results.length;k++){const item=e.results[k];if(item.isFinal)finals+=item[0].transcript+' ';else interim+=item[0].transcript+' '}const n=occurrences(finals,phrase),delta=Math.max(0,n-r._counted);r._counted=n;if(delta){const item=state.items.find(x=>x.id===phraseId);if(item){const day=today();item.days[day]=(item.days[day]||0)+delta;persist();render();enqueueCloudCount(phraseId,day,delta);if((item.days[day]||0)>=item.goal)status('🎉 Meta diária alcançada!')}}$('heard').textContent='Último texto reconhecido: '+(finals+' '+interim).trim().slice(-300)};r.onerror=e=>{lastError=e.error||'desconhecido';if(['not-allowed','service-not-allowed','audio-capture','language-not-supported'].includes(lastError)){stop();status('Erro: '+lastError+'. Verifique microfone e navegador.');return}status('Erro: '+lastError)};r.onend=()=>{if(!listening||active!==session)return;failures++;if(failures>=4){const reason=lastError||'sessão encerrada';stop();status('Reconhecimento interrompido ('+reason+'). Tente iniciar novamente.');return}status('Reconectando ('+failures+'/4)...');restartTimer=setTimeout(launch,1200)};try{r.start()}catch(e){stop();status('Falha ao iniciar: '+e.message)}};launch()}
 $('toggle').onclick=()=>listening?stop():start();$('phrases').onchange=e=>{if(listening)stop();state.active=e.target.value;persist();render()};$('goal').onchange=e=>{current().goal=Math.max(1,Math.min(1000000,Math.floor(Number(e.target.value)||100)));persist();render();pushCloudState()};
 $('add').onclick=()=>{const phrase=prompt('Digite a nova afirmação:');if(phrase===null)return;const text=phrase.trim();if(!norm(text))return alert('Digite uma frase válida.');if(state.items.some(i=>norm(i.text)===norm(text)))return alert('Essa afirmação já existe.');if(listening)stop();const id=uid();state.items.push({id,text,goal:100,days:{}});state.active=id;persist();render();pushCloudState()};
 $('rename').onclick=()=>{const i=current(),phrase=prompt('Editar afirmação:',i.text);if(phrase===null)return;const text=phrase.trim();if(!norm(text))return alert('Digite uma frase válida.');if(listening)stop();i.text=text;persist();render();pushCloudState()};
